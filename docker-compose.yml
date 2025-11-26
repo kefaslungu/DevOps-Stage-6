@@ -1,0 +1,157 @@
+version: "3.8"
+
+services:
+  traefik:
+    image: traefik:v2
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      # provider
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      # metrics
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
+      - "--log.level=ERROR"
+      # logs
+      - "--accesslog=true"
+      # entrypoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # certificatesresolvers
+      - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.myresolver.acme.email=email@admin.com"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    expose:
+      - "8080"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - traefik_letsencrypt:/letsencrypt
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      - AUTH_API_ADDRESS=http://auth-api:8081
+      - TODOS_API_ADDRESS=http://todos-api:8082
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - auth-api
+      - todos-api
+    command: npm run dev
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend-http.entrypoints=web"
+      - "traefik.http.routers.frontend-http.rule=Host(`prestastack.com`)"
+      # tls
+      - "traefik.http.routers.frontend-https.tls=true"
+      - "traefik.http.routers.frontend-https.tls.certresolver=myresolver"
+      - "traefik.http.routers.frontend-https.entrypoints=websecure"
+      - "traefik.http.routers.frontend-https.rule=Host(`prestastack.com`)"
+      # tls redirect
+      - "traefik.http.routers.frontend-http.middlewares=redirect-https"
+      - "traefik.http.middlewares.redirect-https.redirectScheme.scheme=https"
+      - "traefik.http.middlewares.redirect-https.redirectScheme.permanent=true"
+
+  auth-api:
+    build:
+      context: ./auth-api
+    ports:
+      - "${AUTH_API_PORT}:8081"
+    environment:
+      - AUTH_API_PORT=${AUTH_API_PORT}
+      - JWT_SECRET=${JWT_SECRET}
+      - USERS_API_ADDRESS=${USERS_API_ADDRESS}
+    depends_on:
+      - users-api
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.authapi-http.entrypoints=web"
+      - "traefik.http.routers.authapi-http.rule=Host(`auth.prestastack.com`)"
+      # tls
+      - "traefik.http.routers.authapi-https.tls=true"
+      - "traefik.http.routers.authapi-https.tls.certresolver=myresolver"
+      - "traefik.http.routers.authapi-https.entrypoints=websecure"
+      - "traefik.http.routers.authapi-https.rule=Host(`auth.prestastack.com`)"
+      # tls redirect
+      - "traefik.http.routers.authapi-http.middlewares=redirect-https"
+      - "traefik.http.middlewares.redirect-https.redirectScheme.scheme=https"
+      - "traefik.http.middlewares.redirect-https.redirectScheme.permanent=true"
+
+  todos-api:
+    build:
+      context: ./todos-api
+    ports:
+      - "${TODOS_API_PORT}:8082"
+    environment:
+      - TODOS_API_PORT=${TODOS_API_PORT}
+      - JWT_SECRET=${JWT_SECRET}
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_CHANNEL=${REDIS_CHANNEL}
+    depends_on:
+      - redis-queue
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.todosapi-http.entrypoints=web"
+      - "traefik.http.routers.todosapi-http.rule=Host(`todos.prestastack.com`)"
+      # tls
+      - "traefik.http.routers.todosapi-https.tls=true"
+      - "traefik.http.routers.todosapi-https.tls.certresolver=myresolver"
+      - "traefik.http.routers.todosapi-https.entrypoints=websecure"
+      - "traefik.http.routers.todosapi-https.rule=Host(`todos.prestastack.com`)"
+      # tls redirect
+      - "traefik.http.routers.todosapi-http.middlewares=redirect-https"
+      - "traefik.http.middlewares.redirect-https.redirectScheme.scheme=https"
+      - "traefik.http.middlewares.redirect-https.redirectScheme.permanent=true"
+
+  users-api:
+    build:
+      context: ./users-api
+    ports:
+      - "${SERVER_PORT}:8083"
+    environment:
+      - SERVER_PORT=${SERVER_PORT}
+      - JWT_SECRET=${JWT_SECRET}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.usersapi-http.entrypoints=web"
+      - "traefik.http.routers.usersapi-http.rule=Host(`users.prestastack.com`)"
+      # tls
+      - "traefik.http.routers.usersapi-https.tls=true"
+      - "traefik.http.routers.usersapi-https.tls.certresolver=myresolver"
+      - "traefik.http.routers.usersapi-https.entrypoints=websecure"
+      - "traefik.http.routers.usersapi-https.rule=Host(`users.prestastack.com`)"
+      # tls redirect
+      - "traefik.http.routers.usersapi-http.middlewares=redirect-https"
+      - "traefik.http.middlewares.redirect-https.redirectScheme.scheme=https"
+      - "traefik.http.middlewares.redirect-https.redirectScheme.permanent=true"
+
+  log-processor:
+    build:
+      context: ./log-message-processor
+    environment:
+      - REDIS_HOST=${REDIS_HOST}
+      - REDIS_PORT=${REDIS_PORT}
+      - REDIS_CHANNEL=${REDIS_CHANNEL}
+    depends_on:
+      - redis-queue
+
+  redis-queue:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  traefik_letsencrypt:
+  redis_data:
