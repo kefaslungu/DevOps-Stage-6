@@ -2,11 +2,14 @@ FROM node:20
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+
+# Install dependencies with legacy peer deps to avoid Webpack 2 conflicts
+RUN npm install --legacy-peer-deps
 
 COPY . .
 
-RUN npm run build
-
+# Expose port your dev server or build server uses
 EXPOSE 8080
-CMD ["npx", "serve", "-s", "dist", "-l", "8080"]
+
+# Build frontend for production
+CMD ["npm", "run", "build"]
