@@ -6,21 +6,17 @@ services:
     container_name: traefik
     restart: unless-stopped
     command:
-      # Docker provider
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-      # Metrics
       - "--metrics.prometheus=true"
       - "--metrics.prometheus.buckets=0.1,0.3,1.2,5.0"
       - "--log.level=ERROR"
       - "--accesslog=true"
-      # Entry points
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
-      # Certificates resolver
       - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
       - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.myresolver.acme.email=email@admin.com"
+      - "--certificatesresolvers.myresolver.acme.email=jameskefaslungu@gmail.com"
       - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
     ports:
       - "80:80"
@@ -35,24 +31,28 @@ services:
     build:
       context: ./frontend
     environment:
-      - VITE_AUTH_API_URL=https://auth.prestastack.com
-      - VITE_TODOS_API_URL=https://todos.prestastack.com
+      - VITE_AUTH_API_URL=https://kefaslungu.name.ng/api/auth
+      - VITE_TODOS_API_URL=https://kefaslungu.name.ng/api/todos
+      - VITE_USERS_API_URL=https://kefaslungu.name.ng/api/users
     depends_on:
       - auth-api
       - todos-api
-    command: npm run dev
+      - users-api
     labels:
       - "traefik.enable=true"
-      # HTTP → HTTPS redirect
+
+      # HTTP redirect → HTTPS
       - "traefik.http.routers.frontend-http.entrypoints=web"
-      - "traefik.http.routers.frontend-http.rule=Host(`prestastack.com`)"
+      - "traefik.http.routers.frontend-http.rule=Host(`kefaslungu.name.ng`)"
       - "traefik.http.routers.frontend-http.middlewares=frontend-redirect"
       - "traefik.http.middlewares.frontend-redirect.redirectScheme.scheme=https"
       - "traefik.http.middlewares.frontend-redirect.redirectScheme.permanent=true"
-      # HTTPS
+
+      # HTTPS router
       - "traefik.http.routers.frontend-https.entrypoints=websecure"
-      - "traefik.http.routers.frontend-https.rule=Host(`prestastack.com`)"
+      - "traefik.http.routers.frontend-https.rule=Host(`kefaslungu.name.ng`)"
       - "traefik.http.routers.frontend-https.tls.certresolver=myresolver"
+
     networks:
       - web
 
@@ -61,19 +61,20 @@ services:
       context: ./auth-api
     environment:
       - JWT_SECRET=${JWT_SECRET}
-      - USERS_API_ADDRESS=${USERS_API_ADDRESS}
+      - USERS_API_ADDRESS=http://users-api:8083
     depends_on:
       - users-api
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.authapi-http.entrypoints=web"
-      - "traefik.http.routers.authapi-http.rule=Host(`auth.prestastack.com`)"
-      - "traefik.http.routers.authapi-http.middlewares=authapi-redirect"
-      - "traefik.http.middlewares.authapi-redirect.redirectScheme.scheme=https"
-      - "traefik.http.middlewares.authapi-redirect.redirectScheme.permanent=true"
-      - "traefik.http.routers.authapi-https.entrypoints=websecure"
-      - "traefik.http.routers.authapi-https.rule=Host(`auth.prestastack.com`)"
-      - "traefik.http.routers.authapi-https.tls.certresolver=myresolver"
+
+      # /api/auth route
+      - "traefik.http.routers.authapi.entrypoints=websecure"
+      - "traefik.http.routers.authapi.rule=Host(`kefaslungu.name.ng`) && PathPrefix(`/api/auth`)"
+      - "traefik.http.routers.authapi.tls.certresolver=myresolver"
+      - "traefik.http.services.authapi.loadbalancer.server.port=8081"
+      - "traefik.http.middlewares.authapi-strip.stripprefix.prefixes=/api/auth"
+      - "traefik.http.routers.authapi.middlewares=authapi-strip"
+
     networks:
       - web
 
@@ -82,21 +83,22 @@ services:
       context: ./todos-api
     environment:
       - JWT_SECRET=${JWT_SECRET}
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_CHANNEL=${REDIS_CHANNEL}
+      - REDIS_HOST=redis-queue
+      - REDIS_PORT=6379
+      - REDIS_CHANNEL=log_channel
     depends_on:
       - redis-queue
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.todosapi-http.entrypoints=web"
-      - "traefik.http.routers.todosapi-http.rule=Host(`todos.prestastack.com`)"
-      - "traefik.http.routers.todosapi-http.middlewares=todosapi-redirect"
-      - "traefik.http.middlewares.todosapi-redirect.redirectScheme.scheme=https"
-      - "traefik.http.middlewares.todosapi-redirect.redirectScheme.permanent=true"
-      - "traefik.http.routers.todosapi-https.entrypoints=websecure"
-      - "traefik.http.routers.todosapi-https.rule=Host(`todos.prestastack.com`)"
-      - "traefik.http.routers.todosapi-https.tls.certresolver=myresolver"
+
+      # /api/todos route
+      - "traefik.http.routers.todosapi.entrypoints=websecure"
+      - "traefik.http.routers.todosapi.rule=Host(`kefaslungu.name.ng`) && PathPrefix(`/api/todos`)"
+      - "traefik.http.routers.todosapi.tls.certresolver=myresolver"
+      - "traefik.http.services.todosapi.loadbalancer.server.port=8082"
+      - "traefik.http.middlewares.todosapi-strip.stripprefix.prefixes=/api/todos"
+      - "traefik.http.routers.todosapi.middlewares=todosapi-strip"
+
     networks:
       - web
 
@@ -107,14 +109,15 @@ services:
       - JWT_SECRET=${JWT_SECRET}
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.usersapi-http.entrypoints=web"
-      - "traefik.http.routers.usersapi-http.rule=Host(`users.prestastack.com`)"
-      - "traefik.http.routers.usersapi-http.middlewares=usersapi-redirect"
-      - "traefik.http.middlewares.usersapi-redirect.redirectScheme.scheme=https"
-      - "traefik.http.middlewares.usersapi-redirect.redirectScheme.permanent=true"
-      - "traefik.http.routers.usersapi-https.entrypoints=websecure"
-      - "traefik.http.routers.usersapi-https.rule=Host(`users.prestastack.com`)"
-      - "traefik.http.routers.usersapi-https.tls.certresolver=myresolver"
+
+      # /api/users route
+      - "traefik.http.routers.usersapi.entrypoints=websecure"
+      - "traefik.http.routers.usersapi.rule=Host(`kefaslungu.name.ng`) && PathPrefix(`/api/users`)"
+      - "traefik.http.routers.usersapi.tls.certresolver=myresolver"
+      - "traefik.http.services.usersapi.loadbalancer.server.port=8083"
+      - "traefik.http.middlewares.usersapi-strip.stripprefix.prefixes=/api/users"
+      - "traefik.http.routers.usersapi.middlewares=usersapi-strip"
+
     networks:
       - web
 
@@ -122,9 +125,9 @@ services:
     build:
       context: ./log-message-processor
     environment:
-      - REDIS_HOST=${REDIS_HOST}
-      - REDIS_PORT=${REDIS_PORT}
-      - REDIS_CHANNEL=${REDIS_CHANNEL}
+      - REDIS_HOST=redis-queue
+      - REDIS_PORT=6379
+      - REDIS_CHANNEL=log_channel
     depends_on:
       - redis-queue
     networks:
