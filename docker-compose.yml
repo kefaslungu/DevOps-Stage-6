@@ -41,7 +41,7 @@ services:
     labels:
       - "traefik.enable=true"
 
-      # HTTP redirect → HTTPS
+      # HTTP → HTTPS redirect
       - "traefik.http.routers.frontend-http.entrypoints=web"
       - "traefik.http.routers.frontend-http.rule=Host(`kefaslungu.name.ng`)"
       - "traefik.http.routers.frontend-http.middlewares=frontend-redirect"
@@ -52,6 +52,7 @@ services:
       - "traefik.http.routers.frontend-https.entrypoints=websecure"
       - "traefik.http.routers.frontend-https.rule=Host(`kefaslungu.name.ng`)"
       - "traefik.http.routers.frontend-https.tls.certresolver=myresolver"
+      - "traefik.http.services.frontend.loadbalancer.server.port=8080"
 
     networks:
       - web

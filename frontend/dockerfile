@@ -1,12 +1,31 @@
-# Development frontend with hot-reload
-FROM node:12
+# Stage 1: Build
+FROM node:20-alpine AS build
 
 WORKDIR /app
+
+# Install dependencies
 COPY package*.json ./
 RUN npm install
 
+# Copy source code
 COPY . .
 
+# Build static files
+RUN npm run build
+
+# Stage 2: Serve
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy built files from previous stage
+COPY --from=build /app/dist ./dist
+
+# Install lightweight static server
+RUN npm install -g serve
+
+# Expose port for Traefik internal routing
 EXPOSE 8080
 
-CMD ["npm", "run", "dev"]
+# Start static server for SPA
+CMD ["serve", "-s", "dist", "-l", "8080"]
