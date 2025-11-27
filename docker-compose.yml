@@ -40,49 +40,45 @@ services:
       - users-api
     labels:
       - "traefik.enable=true"
-
-      # HTTP → HTTPS redirect
       - "traefik.http.routers.frontend-http.entrypoints=web"
       - "traefik.http.routers.frontend-http.rule=Host(`kefaslungu.name.ng`)"
       - "traefik.http.routers.frontend-http.middlewares=frontend-redirect"
       - "traefik.http.middlewares.frontend-redirect.redirectScheme.scheme=https"
       - "traefik.http.middlewares.frontend-redirect.redirectScheme.permanent=true"
-
-      # HTTPS router
       - "traefik.http.routers.frontend-https.entrypoints=websecure"
       - "traefik.http.routers.frontend-https.rule=Host(`kefaslungu.name.ng`)"
       - "traefik.http.routers.frontend-https.tls.certresolver=myresolver"
       - "traefik.http.services.frontend.loadbalancer.server.port=8080"
-
     networks:
       - web
+    restart: unless-stopped
 
   auth-api:
     build:
       context: ./auth-api
     environment:
+      - AUTH_API_PORT=8081
       - JWT_SECRET=${JWT_SECRET}
       - USERS_API_ADDRESS=http://users-api:8083
     depends_on:
       - users-api
     labels:
       - "traefik.enable=true"
-
-      # /api/auth route
       - "traefik.http.routers.authapi.entrypoints=websecure"
       - "traefik.http.routers.authapi.rule=Host(`kefaslungu.name.ng`) && PathPrefix(`/api/auth`)"
       - "traefik.http.routers.authapi.tls.certresolver=myresolver"
       - "traefik.http.services.authapi.loadbalancer.server.port=8081"
       - "traefik.http.middlewares.authapi-strip.stripprefix.prefixes=/api/auth"
       - "traefik.http.routers.authapi.middlewares=authapi-strip"
-
     networks:
       - web
+    restart: unless-stopped
 
   todos-api:
     build:
       context: ./todos-api
     environment:
+      - TODOS_API_PORT=8082
       - JWT_SECRET=${JWT_SECRET}
       - REDIS_HOST=redis-queue
       - REDIS_PORT=6379
@@ -91,36 +87,33 @@ services:
       - redis-queue
     labels:
       - "traefik.enable=true"
-
-      # /api/todos route
       - "traefik.http.routers.todosapi.entrypoints=websecure"
       - "traefik.http.routers.todosapi.rule=Host(`kefaslungu.name.ng`) && PathPrefix(`/api/todos`)"
       - "traefik.http.routers.todosapi.tls.certresolver=myresolver"
       - "traefik.http.services.todosapi.loadbalancer.server.port=8082"
       - "traefik.http.middlewares.todosapi-strip.stripprefix.prefixes=/api/todos"
       - "traefik.http.routers.todosapi.middlewares=todosapi-strip"
-
     networks:
       - web
+    restart: unless-stopped
 
   users-api:
     build:
       context: ./users-api
     environment:
+      - SERVER_PORT=8083
       - JWT_SECRET=${JWT_SECRET}
     labels:
       - "traefik.enable=true"
-
-      # /api/users route
       - "traefik.http.routers.usersapi.entrypoints=websecure"
       - "traefik.http.routers.usersapi.rule=Host(`kefaslungu.name.ng`) && PathPrefix(`/api/users`)"
       - "traefik.http.routers.usersapi.tls.certresolver=myresolver"
       - "traefik.http.services.usersapi.loadbalancer.server.port=8083"
       - "traefik.http.middlewares.usersapi-strip.stripprefix.prefixes=/api/users"
       - "traefik.http.routers.usersapi.middlewares=usersapi-strip"
-
     networks:
       - web
+    restart: unless-stopped
 
   log-processor:
     build:
@@ -133,6 +126,7 @@ services:
       - redis-queue
     networks:
       - web
+    restart: unless-stopped
 
   redis-queue:
     image: redis:7
@@ -140,6 +134,7 @@ services:
       - redis_data:/data
     networks:
       - web
+    restart: unless-stopped
 
 volumes:
   traefik_letsencrypt:
