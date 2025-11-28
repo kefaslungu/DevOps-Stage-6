@@ -1,12 +1,12 @@
-# Java Spring Boot Users API
-FROM maven:3.8.6-openjdk-11 AS builder
+# Java Spring Boot Users API - Build with Java 8
+FROM maven:3.6-jdk-8 AS builder
 WORKDIR /app
 COPY pom.xml .
 COPY src ./src
-RUN mvn package -DskipTests
+RUN mvn clean package -DskipTests
 
-# Use Java 11 runtime
-FROM eclipse-temurin:11-jre
+# Run with Java 8 - Use Amazon Corretto (AWS's OpenJDK distribution)
+FROM amazoncorretto:8-alpine-jre
 WORKDIR /app
 COPY --from=builder /app/target/*.jar ./users-api.jar
 EXPOSE 8083
