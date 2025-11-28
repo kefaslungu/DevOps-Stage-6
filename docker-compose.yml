@@ -30,10 +30,10 @@ services:
   frontend:
     build:
       context: ./frontend
-    environment:
-      - VITE_AUTH_API_URL=https://kefaslungu.name.ng/api/auth
-      - VITE_TODOS_API_URL=https://kefaslungu.name.ng/api/todos
-      - VITE_USERS_API_URL=https://kefaslungu.name.ng/api/users
+      args:
+        VITE_AUTH_API_URL: https://kefaslungu.name.ng/api/auth
+        VITE_TODOS_API_URL: https://kefaslungu.name.ng/api/todos
+        VITE_USERS_API_URL: https://kefaslungu.name.ng/api/users
     depends_on:
       - auth-api
       - todos-api
