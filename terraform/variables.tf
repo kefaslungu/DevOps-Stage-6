@@ -7,7 +7,7 @@ variable "location" {
 variable "resource_group_name" {
   description = "Name of the Azure resource group to create"
   type        = string
-  default     = "HNG_stage4_rg"
+  default     = "HNG13_stage6_rg"
 }
 
 variable "instance_size" {
@@ -19,7 +19,7 @@ variable "instance_size" {
 variable "admin_username" {
   description = "Admin username for the VM"
   type        = string
-  default     = "HNG_kefas"
+  default     = "kefaslungu"
 }
 
 variable "ssh_public_key_path" {

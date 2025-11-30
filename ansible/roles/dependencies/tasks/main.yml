@@ -1,0 +1,34 @@
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install Docker and Docker Compose via apt
+  apt:
+    name:
+      - docker.io
+      - docker-compose
+    state: present
+
+- name: Add current user to the docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: yes
+
+- name: Ensure git is installed
+  apt:
+    name: git
+    state: present
+
+- name: Clone the application repository
+  git:
+    repo: "{{ git_repo_url }}"
+    dest: "{{ app_dest }}"
+    version: "{{ git_branch }}"
+    force: yes
+
+- name: Run Docker Compose to deploy the application
+  shell: docker-compose up -d --build
+  args:
+    chdir: "{{ app_dest }}"

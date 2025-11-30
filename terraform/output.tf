@@ -1,5 +1,5 @@
 output "instance_ip" {
-  value = azurerm_public_ip.HNG_stage4_ip.ip_address
+  value = azurerm_public_ip.HNG13_stage6_ip.ip_address
 }
 
 output "domain" {

@@ -1,0 +1,8 @@
+---
+all:
+  hosts:
+    HNG_stage4:
+      ansible_host: 3.89.62.174
+      ansible_user: ubuntu
+      ansible_ssh_private_key_file: ~/key.pem
+      ansible_python_interpreter: /usr/bin/python3

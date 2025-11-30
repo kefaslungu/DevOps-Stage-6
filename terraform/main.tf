@@ -1,3 +1,12 @@
+# Azure Provider Configuration
+provider "azurerm" {
+  features        {}
+  client_id       = var.client_id
+  client_secret   = var.client_secret
+  subscription_id = var.subscription_id
+  tenant_id       = var.tenant_id
+}
+
 # Resource Group
 resource "azurerm_resource_group" "HNG13_stage6_rg" {
   name     = var.resource_group_name
@@ -9,7 +18,7 @@ resource "azurerm_virtual_network" "HNG13_stage6_vnet" {
   name                = "HNG13_stage6-vnet"
   resource_group_name = azurerm_resource_group.HNG13_stage6_rg.name
   location            = var.location
-  address_space       = ["10.0.0.0/16"]
+  address_space       = [var.vnet_address_space]
 }
 
 # Subnet
@@ -17,7 +26,7 @@ resource "azurerm_subnet" "HNG13_stage6_subnet" {
   name                 = "HNG13_stage6-subnet"
   resource_group_name  = azurerm_resource_group.HNG13_stage6_rg.name
   virtual_network_name = azurerm_virtual_network.HNG13_stage6_vnet.name
-  address_prefixes     = ["10.0.1.0/24"]
+  address_prefixes = [var.subnet_prefix]
 }
 
 # Network Security Group with Ingress Rules
@@ -33,8 +42,8 @@ resource "azurerm_network_security_group" "HNG13_stage6_nsg" {
     access                     = "Allow"
     protocol                   = "Tcp"
     source_address_prefix      = "*"
-  source_port_range      = "*"
-  destination_address_prefix = "*"
+    source_port_range          = "*"
+    destination_address_prefix = "*"
     destination_port_range     = 22
   }
 
@@ -45,8 +54,8 @@ resource "azurerm_network_security_group" "HNG13_stage6_nsg" {
     access                     = "Allow"
     protocol                   = "Tcp"
     source_address_prefix      = "*"
-  source_port_range      = "*"
-  destination_address_prefix = "*"
+    source_port_range          = "*"
+    destination_address_prefix = "*"
     destination_port_range     = 80
   }
 
@@ -57,8 +66,8 @@ resource "azurerm_network_security_group" "HNG13_stage6_nsg" {
     access                     = "Allow"
     protocol                   = "Tcp"
     source_address_prefix      = "*"
-  source_port_range      = "*"
-  destination_address_prefix = "*"
+    source_port_range          = "*"
+    destination_address_prefix = "*"
     destination_port_range     = 443
   }
 
@@ -69,8 +78,8 @@ resource "azurerm_network_security_group" "HNG13_stage6_nsg" {
     access                     = "Allow"
     protocol                   = "Tcp"
     source_address_prefix      = "*"
-  source_port_range      = "*"
-  destination_address_prefix = "*"
+    source_port_range          = "*"
+    destination_address_prefix = "*"
     destination_port_range     = 8080
   }
 }
@@ -81,7 +90,7 @@ resource "azurerm_public_ip" "HNG13_stage6_ip" {
   location            = var.location
   resource_group_name = azurerm_resource_group.HNG13_stage6_rg.name
   allocation_method   = "Static"
-  sku                 = "Basic"
+  sku                 = "Standard"
 }
 
 # Network Interface
@@ -121,7 +130,7 @@ resource "azurerm_linux_virtual_machine" "HNG13_stage6_VM" {
   os_disk {
     caching              = "ReadWrite"
     storage_account_type = "Standard_LRS"
-    disk_size_gb         = 16
+    disk_size_gb         = 30
   }
 
   source_image_reference {
@@ -176,7 +185,7 @@ resource "azurerm_dns_a_record" "auth_subdomain" {
 
 resource "azurerm_dns_a_record" "todos_subdomain" {
   name                = "todos"
-  zone_name           = azurerm_dns_zone.HNG_13stage6_zone.name
+  zone_name           = azurerm_dns_zone.HNG13_stage6_zone.name # FIX: Corrected resource name from HNG_13stage6_zone
   resource_group_name = azurerm_resource_group.HNG13_stage6_rg.name
   ttl                 = 300
   records             = [azurerm_public_ip.HNG13_stage6_ip.ip_address]
@@ -199,7 +208,7 @@ resource "local_file" "ansible_inventory" {
     domain_name  = var.domain_name
     admin_email  = var.admin_email
   })
-  filename = "../ansible/inventory/hosts.yml"
+  filename   = "../ansible/inventory/hosts.yml"
   depends_on = [azurerm_linux_virtual_machine.HNG13_stage6_VM, null_resource.create_ansible_dirs]
 }
 
@@ -211,7 +220,7 @@ resource "local_file" "ansible_vars" {
     git_repo_url = var.git_repo_url
     git_branch   = var.git_branch
   })
-  filename = "../ansible/vars/main.yml"
+  filename   = "../ansible/vars/main.yml"
   depends_on = [azurerm_linux_virtual_machine.HNG13_stage6_VM, null_resource.create_ansible_dirs]
 }
 

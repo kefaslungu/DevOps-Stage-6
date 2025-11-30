@@ -6,7 +6,7 @@ COPY src ./src
 RUN mvn clean package -DskipTests
 
 # Run with Java 8 - Use Amazon Corretto (AWS's OpenJDK distribution)
-FROM amazoncorretto:8-alpine-jre
+FROM eclipse-temurin:8-jre-alpine
 WORKDIR /app
 COPY --from=builder /app/target/*.jar ./users-api.jar
 EXPOSE 8083
