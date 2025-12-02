@@ -2,6 +2,7 @@
 - name: Update apt cache
   apt:
     update_cache: yes
+    cache_valid_time: 3600
 
 - name: Install Docker and Docker Compose via apt
   apt:
@@ -9,6 +10,7 @@
       - docker.io
       - docker-compose
     state: present
+  notify: restart docker service
 
 - name: Add current user to the docker group
   user:
@@ -21,14 +23,26 @@
     name: git
     state: present
 
+- name: Create application directory
+  file:
+    path: "{{ app_dest }}"
+    state: directory
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
 - name: Clone the application repository
   git:
     repo: "{{ git_repo_url }}"
     dest: "{{ app_dest }}"
     version: "{{ git_branch }}"
     force: yes
+  register: git_clone_result
+  notify: restart docker services
 
-- name: Run Docker Compose to deploy the application
-  shell: docker-compose up -d --build
-  args:
-    chdir: "{{ app_dest }}"
+- name: Copy docker-compose.yml for monitoring
+  copy:
+    src: "{{ app_dest }}/docker-compose.yml"
+    dest: /tmp/docker-compose.yml.current
+    remote_src: yes
+  when: git_clone_result.changed
+  notify: restart docker services

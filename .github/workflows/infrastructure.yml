@@ -526,16 +526,16 @@ jobs:
         echo "📝 Updating Ansible inventory with IP: $INSTANCE_IP"
 
         # Create inventory directory if it doesn't exist
-        mkdir -p infra/ansible/inventory
+        mkdir -p ansible/inventory
 
-        # Create/update hosts.ini
-        cat > infra/ansible/inventory/hosts.ini <<EOF
+        # Create/update hosts.yml
+        cat > ansible/inventory/hosts.yml <<EOF
         [web]
         todo_server ansible_host=$INSTANCE_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/devops_stage6 ansible_ssh_common_args='-o StrictHostKeyChecking=no'
         EOF
 
         echo "✅ Inventory updated:"
-        cat infra/ansible/inventory/hosts.ini
+        cat ansible/inventory/hosts.yml
 
     - name: Wait for SSH to be Ready
       run: |
@@ -555,13 +555,13 @@ jobs:
         exit 1
 
     - name: Test Ansible Connection
-      working-directory: ./infra/ansible
+      working-directory: ./ansible
       run: |
         echo "🔍 Testing Ansible connection..."
-        ansible all -i inventory/hosts.ini -m ping -v
+        ansible all -i inventory/hosts.yml -m ping -v
 
     - name: Run Ansible Playbook
-      working-directory: ./infra/ansible
+      working-directory: ./ansible
       run: |
         echo "🚀 Running Ansible configuration..."
         ansible-playbook -i inventory/hosts.ini playbook.yml -v
@@ -787,16 +787,16 @@ jobs:
 
     - name: Setup SSH Key for Terraform
       run: |
-        mkdir -p ${{ github.workspace }}/infra/terraform/.ssh
-        echo "${{ secrets.SSH_PUBLIC_KEY }}" > ${{ github.workspace }}/infra/terraform/.ssh/devops_stage6.pub
-        chmod 644 ${{ github.workspace }}/infra/terraform/.ssh/devops_stage6.pub
+        mkdir -p ${{ github.workspace }}/terraform/.ssh
+        echo "${{ secrets.SSH_PUBLIC_KEY }}" > ${{ github.workspace }}/terraform/.ssh/devops_stage6.pub
+        chmod 644 ${{ github.workspace }}/terraform/.ssh/devops_stage6.pub
 
     - name: Terraform Init
-      working-directory: ./infra/terraform
+      working-directory: ./terraform
       run: terraform init
 
     - name: Terraform Apply (Auto)
-      working-directory: ./infra/terraform
+      working-directory: ./terraform
       run: |
         echo "✅ No infrastructure drift detected"
         echo "Terraform state matches desired configuration"
@@ -804,7 +804,7 @@ jobs:
 
     - name: Check if Server Exists
       id: check_server
-      working-directory: ./infra/terraform
+      working-directory: ./terraform
       run: |
         INSTANCE_ID=$(terraform output -raw instance_id 2>/dev/null || echo "")
         INSTANCE_IP=$(terraform output -raw instance_public_ip 2>/dev/null || echo "")
@@ -832,7 +832,7 @@ jobs:
 
     - name: Run Ansible Playbook
       if: steps.check_server.outputs.server_exists == 'true'
-      working-directory: ./infra/ansible
+      working-directory: ./ansible
       run: |
         echo "🚀 Running Ansible configuration (no drift path)..."
         ansible-playbook -i inventory/hosts.ini playbook.yml -v
@@ -894,8 +894,8 @@ jobs:
       run: |
         INSTANCE_IP="${{ needs.auto-apply-no-drift.outputs.instance_ip }}"
         echo "📝 Updating Ansible inventory with IP: $INSTANCE_IP"
-        mkdir -p infra/ansible/inventory
-        cat > infra/ansible/inventory/hosts.ini <<EOF
+        mkdir -p ansible/inventory
+        cat > ansible/inventory/hosts.yml <<EOF
         [web]
         todo_server ansible_host=$INSTANCE_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/devops_stage6 ansible_ssh_common_args='-o StrictHostKeyChecking=no'
         EOF

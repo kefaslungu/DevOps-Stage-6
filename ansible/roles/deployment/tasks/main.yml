@@ -1,10 +1,16 @@
-- name: Clone application repository
+---
+- name: Clone or update application repository
   git:
-    repo: "https://github.com/kefaslungu/DevOps-Stage-6.git"
-    dest: "/home/ubuntu/app"
+    repo: https://github.com/kefaslungu/DevOps-Stage-6.git
+    dest: /home/ubuntu/app
     version: main
+  register: git_result
+  notify: restart docker compose
 
-- name: Start application with Docker Compose
-  shell: docker-compose up -d
-  args:
-    chdir: /home/ubuntu/app
+- name: Copy docker-compose.yml for change detection
+  copy:
+    src: /home/ubuntu/app/docker-compose.yml
+    dest: /tmp/docker-compose.yml.deployed
+    remote_src: yes
+  when: git_result.changed
+  notify: restart docker compose

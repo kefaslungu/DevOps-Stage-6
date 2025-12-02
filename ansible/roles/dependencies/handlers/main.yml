@@ -1,0 +1,10 @@
+---
+- name: restart docker service
+  systemd:
+    name: docker
+    state: restarted
+
+- name: restart docker services
+  shell: docker-compose up -d --build
+  args:
+    chdir: "{{ app_dest }}"
