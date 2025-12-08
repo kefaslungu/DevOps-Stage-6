@@ -1,0 +1,110 @@
+# infra/ansible/roles/deploy/tasks/main.yml
+---
+- name: Check if repository exists
+  stat:
+    path: "{{ app_dir }}/.git"
+  register: git_repo
+
+- name: Clone application repository
+  git:
+    repo: "{{ repo_url }}"
+    dest: "{{ app_dir }}"
+    version: main
+    force: yes
+  when: not git_repo.stat.exists
+  become_user: "{{ app_user }}"
+
+- name: Pull latest changes
+  git:
+    repo: "{{ repo_url }}"
+    dest: "{{ app_dir }}"
+    version: main
+    force: yes
+  become_user: "{{ app_user }}"
+  register: git_pull
+
+- name: Create environment file
+  template:
+    src: .env.j2
+    dest: "{{ app_dir }}/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0600'
+  register: env_file
+
+- name: Create Traefik configuration
+  template:
+    src: traefik.yml.j2
+    dest: "{{ app_dir }}/traefik.yml"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0644'
+  register: traefik_config
+
+- name: Create Traefik dynamic configuration
+  template:
+    src: traefik-dynamic.yml.j2
+    dest: "{{ app_dir }}/traefik-dynamic.yml"
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0644'
+  register: traefik_dynamic
+
+- name: Create acme.json for Let's Encrypt
+  file:
+    path: "{{ app_dir }}/acme.json"
+    state: touch
+    owner: "{{ app_user }}"
+    group: "{{ app_user }}"
+    mode: '0600'
+
+- name: Stop existing containers
+  shell: docker compose down
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  ignore_errors: yes
+  when: git_pull.changed or env_file.changed or traefik_config.changed
+
+- name: Pull Docker images
+  shell: docker compose pull
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when: git_pull.changed or env_file.changed
+
+- name: Build Docker images
+  shell: docker compose build
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  when: git_pull.changed
+
+- name: Start application services
+  shell: docker compose up -d
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+
+- name: Wait for services to be healthy
+  shell: docker compose ps --format json | jq -r '.[].Health'
+  args:
+    chdir: "{{ app_dir }}"
+  register: health_check
+  until: health_check.stdout.find("unhealthy") == -1
+  retries: 10
+  delay: 10
+  become_user: "{{ app_user }}"
+  ignore_errors: yes
+
+- name: Display running containers
+  shell: docker compose ps
+  args:
+    chdir: "{{ app_dir }}"
+  become_user: "{{ app_user }}"
+  register: containers_status
+
+- name: Show container status
+  debug:
+    var: containers_status.stdout_lines
+

@@ -1,0 +1,29 @@
+# infra/ansible/roles/deploy/templates/traefik-dynamic.yml.j2
+# Traefik Dynamic Configuration
+http:
+  routers:
+    dashboard:
+      rule: "Host(`{{ domain_name }}`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      service: api@internal
+      middlewares:
+        - auth
+      tls:
+        certResolver: letsencrypt
+
+  middlewares:
+    auth:
+      basicAuth:
+        users:
+          - "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/"  # admin:admin
+
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+        customFrameOptionsValue: "SAMEORIGIN"
+

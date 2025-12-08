@@ -1,0 +1,31 @@
+# infra/ansible/playbook.yml
+---
+- name: Deploy TODO Microservices Application
+  hosts: webservers
+  become: yes
+  gather_facts: yes
+
+  vars:
+    app_user: kefaslungu
+    app_dir: /DevOps-Stage-6
+    repo_url: https://github.com/kefaslungu/devops-stage-6.git
+    domain_name: "{{ lookup('env', 'DOMAIN_NAME') | default('kefaslungu.name.ng', true) }}"
+    email: "{{ lookup('env', 'LETSENCRYPT_EMAIL') | default('jameskefaslungu@gmail.com', true) }}"
+
+  pre_tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+  roles:
+    - dependencies
+    - deploy
+
+  post_tasks:
+    - name: Display application status
+      debug:
+        msg: |
+          ✅ Deployment completed successfully!
+          🌐 Application URL: https://{{ domain_name }}
+          📊 Check status: docker compose ps

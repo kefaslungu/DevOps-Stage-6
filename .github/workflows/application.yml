@@ -1,304 +1,90 @@
-name: Application Deployment
+# .github/workflows/application.yml
+name: Application Deployment Pipeline
 
 on:
   push:
-    branches:
-    - main
+    branches: [main, master]
     paths:
-    - 'frontend/**'
-    - 'auth-api/**'
-    - 'todos-api/**'
-    - 'users-api/**'
-    - 'log-processor/**'
-    - 'docker-compose.yml'
-    - '.env.example'
+      - 'frontend/**'
+      - 'auth-api/**'
+      - 'todos-api/**'
+      - 'users-api/**'
+      - 'log-message-processor/**'
+      - 'docker-compose.yml'
+      - 'Dockerfile*'
   workflow_dispatch:
-
-
-env:
-  AZURE_LOCATION: eastus
 
 jobs:
   detect-changes:
     name: Detect Changed Services
     runs-on: ubuntu-latest
     outputs:
-      frontend_changed: ${{ steps.changes.outputs.frontend }}
-      auth_changed: ${{ steps.changes.outputs.auth }}
-      todos_changed: ${{ steps.changes.outputs.todos }}
-      users_changed: ${{ steps.changes.outputs.users }}
-      logs_changed: ${{ steps.changes.outputs.logs }}
-      compose_changed: ${{ steps.changes.outputs.compose }}
-
+      frontend: ${{ steps.changes.outputs.frontend }}
+      auth: ${{ steps.changes.outputs.auth }}
+      todos: ${{ steps.changes.outputs.todos }}
+      users: ${{ steps.changes.outputs.users }}
+      logs: ${{ steps.changes.outputs.logs }}
+      compose: ${{ steps.changes.outputs.compose }}
+    
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 2
-
-    - name: Check Changed Files
-      id: changes
-      run: |
-        if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-          echo "frontend=true" >> $GITHUB_OUTPUT
-          echo "auth=true" >> $GITHUB_OUTPUT
-          echo "todos=true" >> $GITHUB_OUTPUT
-          echo "users=true" >> $GITHUB_OUTPUT
-          echo "logs=true" >> $GITHUB_OUTPUT
-          echo "compose=true" >> $GITHUB_OUTPUT
-        else
-          git diff --name-only HEAD^ HEAD > changed_files.txt
-          
-          if grep -q "frontend/" changed_files.txt; then
-            echo "frontend=true" >> $GITHUB_OUTPUT
-            echo "✅ Frontend changed"
-          else
-            echo "frontend=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if grep -q "auth-api/" changed_files.txt; then
-            echo "auth=true" >> $GITHUB_OUTPUT
-            echo "✅ Auth API changed"
-          else
-            echo "auth=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if grep -q "todos-api/" changed_files.txt; then
-            echo "todos=true" >> $GITHUB_OUTPUT
-            echo "✅ Todos API changed"
-          else
-            echo "todos=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if grep -q "users-api/" changed_files.txt; then
-            echo "users=true" >> $GITHUB_OUTPUT
-            echo "✅ Users API changed"
-          else
-            echo "users=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if grep -q "log-processor/" changed_files.txt; then
-            echo "logs=true" >> $GITHUB_OUTPUT
-            echo "✅ Log processor changed"
-          else
-            echo "logs=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if grep -q "docker-compose.yml" changed_files.txt; then
-            echo "compose=true" >> $GITHUB_OUTPUT
-            echo "✅ Docker Compose changed"
-          else
-            echo "compose=false" >> $GITHUB_OUTPUT
-          fi
-        fi
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v2
+        id: changes
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+            auth:
+              - 'auth-api/**'
+            todos:
+              - 'todos-api/**'
+            users:
+              - 'users-api/**'
+            logs:
+              - 'log-message-processor/**'
+            compose:
+              - 'docker-compose.yml'
 
   deploy-application:
     name: Deploy Application
+    runs-on: ubuntu-latest
     needs: detect-changes
     if: |
-      needs.detect-changes.outputs.frontend_changed == 'true' ||
-      needs.detect-changes.outputs.auth_changed == 'true' ||
-      needs.detect-changes.outputs.todos_changed == 'true' ||
-      needs.detect-changes.outputs.users_changed == 'true' ||
-      needs.detect-changes.outputs.logs_changed == 'true' ||
-      needs.detect-changes.outputs.compose_changed == 'true'
-    runs-on: ubuntu-latest
-
+      needs.detect-changes.outputs.frontend == 'true' ||
+      needs.detect-changes.outputs.auth == 'true' ||
+      needs.detect-changes.outputs.todos == 'true' ||
+      needs.detect-changes.outputs.users == 'true' ||
+      needs.detect-changes.outputs.logs == 'true' ||
+      needs.detect-changes.outputs.compose == 'true'
+    
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Login to Azure
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: 1.5.0
-        terraform_wrapper: false
+      - name: Install Ansible
+        run: pip install ansible
 
-    - name: Get Server IP from Terraform
-      id: get_ip
-      working-directory: ./terraform
-      run: |
-        terraform init
-        SERVER_IP=$(terraform output -raw server_public_ip)
-        echo "server_ip=$SERVER_IP" >> $GITHUB_OUTPUT
-        echo "📍 Deploying to: $SERVER_IP"
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY_CONTENT }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          echo "${{ secrets.SERVER_IP }} $(ssh-keyscan -H ${{ secrets.SERVER_IP }} 2>/dev/null)" >> ~/.ssh/known_hosts
 
-    - name: Setup SSH Key
-      run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan -H ${{ steps.get_ip.outputs.server_ip }} >> ~/.ssh/known_hosts
+      - name: Create Dynamic Inventory
+        run: |
+          mkdir -p infra/ansible
+          cat > infra/ansible/inventory.ini << EOF
+          [webservers]
+          todo-server ansible_host=${{ secrets.SERVER_IP }} ansible_user=kefaslungu ansible_ssh_private_key_file=~/.ssh/id_rsa
+          EOF
 
-    - name: Deploy to Server
-      env:
-        SERVER_IP: ${{ steps.get_ip.outputs.server_ip }}
-      run: |
-        echo "🚀 Deploying application to server..."
-
-        ssh -i ~/.ssh/id_rsa ubuntu@$SERVER_IP << 'ENDSSH'
-          set -e
-          
-          echo "📂 Navigating to application directory..."
-          cd /opt/todo-app
-          
-          echo "🧹 Discarding local changes..."
-          git reset --hard HEAD
-          git clean -fd
-          
-          echo "📥 Pulling latest changes..."
-          git pull origin main
-          
-          echo "🔄 Pulling latest images..."
-          docker compose pull || true
-          
-          echo "🏗️  Building updated services..."
-          docker compose build --no-cache
-          
-          echo "🛑 Stopping old containers..."
-          docker compose down
-          
-          echo "🚀 Starting updated containers..."
-          docker compose up -d
-          
-          echo "⏳ Waiting for services to be ready..."
-          sleep 10
-          
-          echo "📊 Checking container status..."
-          docker compose ps
-          
-          echo "✅ Deployment complete!"
-        ENDSSH
-
-    - name: Verify Deployment
-      env:
-        SERVER_IP: ${{ steps.get_ip.outputs.server_ip }}
-      run: |
-        echo "🔍 Verifying deployment..."
-
-        # Wait a bit for services to fully start
-        sleep 15
-
-        # Check if services are responding
-        for i in {1..5}; do
-          if curl -f -s https://padre.the.chickenkiller.com > /dev/null; then
-            echo "✅ Frontend is responding"
-            break
-          else
-            echo "⏳ Waiting for frontend... (attempt $i/5)"
-            sleep 10
-          fi
-        done
-
-        # Final check
-        if curl -f -s https://padre.the.chickenkiller.com > /dev/null; then
-          echo "✅ Deployment verified successfully"
-        else
-          echo "❌ Deployment verification failed"
-          exit 1
-        fi
-
-    - name: Get Deployment Logs
-      if: always()
-      env:
-        SERVER_IP: ${{ steps.get_ip.outputs.server_ip }}
-      run: |
-        echo "📋 Fetching recent logs..."
-        ssh -i ~/.ssh/id_rsa ubuntu@$SERVER_IP << 'ENDSSH'
-          cd /opt/todo-app
-          echo "=== Container Status ==="
-          docker compose ps
-          echo ""
-          echo "=== Recent Logs ==="
-          docker compose logs --tail=30
-        ENDSSH
-
-    - name: Send Success Email
-      if: success()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: '✅ Application Deployed Successfully - padre.the.chickenkiller.com'
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: 'DevOps CI/CD <${{ secrets.EMAIL_USERNAME }}>'
-        body: |
-          ✅ APPLICATION DEPLOYMENT SUCCESSFUL
-
-          Your TODO application has been successfully deployed.
-
-          📋 Details:
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Repository: ${{ github.repository }}
-          Branch: ${{ github.ref_name }}
-          Commit: ${{ github.sha }}
-          Deployed by: ${{ github.actor }}
-          Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          📦 Changed Services:
-          - Frontend: ${{ needs.detect-changes.outputs.frontend_changed }}
-          - Auth API: ${{ needs.detect-changes.outputs.auth_changed }}
-          - Todos API: ${{ needs.detect-changes.outputs.todos_changed }}
-          - Users API: ${{ needs.detect-changes.outputs.users_changed }}
-          - Log Processor: ${{ needs.detect-changes.outputs.logs_changed }}
-          - Docker Compose: ${{ needs.detect-changes.outputs.compose_changed }}
-
-          🌐 Application URL: https://padre.the.chickenkiller.com
-
-          ✨ All services are now running the latest version.
-
-    - name: Send Failure Email
-      if: failure()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: '❌ Application Deployment Failed - padre.the.chickenkiller.com'
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: 'DevOps CI/CD <${{ secrets.EMAIL_USERNAME }}>'
-        body: |
-          ❌ APPLICATION DEPLOYMENT FAILED
-
-          The application deployment encountered an error.
-
-          📋 Details:
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Repository: ${{ github.repository }}
-          Branch: ${{ github.ref_name }}
-          Commit: ${{ github.sha }}
-          Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          ⚠️ ACTION REQUIRED:
-          Please check the workflow logs for error details.
-
-          🔍 Debug steps:
-          1. SSH into server: ssh ubuntu@${{ steps.get_ip.outputs.server_ip }}
-          2. Check logs: cd /opt/todo-app && docker compose logs
-          3. Check status: docker compose ps
-
-  no-changes-detected:
-    name: No Application Changes
-    needs: detect-changes
-    if: |
-      needs.detect-changes.outputs.frontend_changed == 'false' &&
-      needs.detect-changes.outputs.auth_changed == 'false' &&
-      needs.detect-changes.outputs.todos_changed == 'false' &&
-      needs.detect-changes.outputs.users_changed == 'false' &&
-      needs.detect-changes.outputs.logs_changed == 'false' &&
-      needs.detect-changes.outputs.compose_changed == 'false'
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Log No Changes
-      run: |
-        echo "✅ No application changes detected"
-        echo "Skipping deployment"
+      - name: Deploy with Ansible
+        working-directory: ./infra/ansible
+        run: |
+          ansible-playbook -i inventory.ini playbook.yml --tags deploy

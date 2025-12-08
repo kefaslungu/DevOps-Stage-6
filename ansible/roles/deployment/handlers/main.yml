@@ -1,5 +1,0 @@
----
-- name: restart docker compose
-  shell: docker-compose up -d --build
-  args:
-    chdir: /home/ubuntu/app

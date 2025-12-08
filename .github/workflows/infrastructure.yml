@@ -1,700 +1,279 @@
-name: Infrastructure Deployment
+# .github/workflows/infrastructure.yml
+name: Infrastructure Pipeline with Drift Detection
 
 on:
   push:
-    branches:
-    - main
+    branches: [main, master]
     paths:
-    - 'terraform/**'
-    - 'ansible/**'
+      - 'infra/terraform/**'
+      - 'infra/ansible/**'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'infra/terraform/**'
+      - 'infra/ansible/**'
   workflow_dispatch:
 
 env:
-  AZURE_LOCATION: eastus
-  TF_VERSION: 1.5.0
+  TF_VERSION: '1.6.0'
+  ANSIBLE_VERSION: '2.15'
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
 
 jobs:
   terraform-plan:
     name: Terraform Plan & Drift Detection
     runs-on: ubuntu-latest
-    env:
-      _CLIENT_ID: ${{ secrets.CLIENT_ID }}
-      CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
-      SUBSCRIPTION_ID: ${{ secrets.SUBSCRIPTION_ID }}
-      TENANT_ID: ${{ secrets.TENANT_ID }}
     outputs:
-      has_changes: ${{ steps.check_changes.outputs.has_changes }}
+      drift_detected: ${{ steps.drift.outputs.drift_detected }}
       plan_exitcode: ${{ steps.plan.outputs.exitcode }}
-
+    
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Login to Azure
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: ${{ env.TF_VERSION }}
-        terraform_wrapper: false
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
 
-    - name: Setup SSH Key for Terraform
-      run: |
-        mkdir -p ${{ github.workspace }}/terraform/.ssh
-        echo "${{ secrets.SSH_PUBLIC_KEY_CONTENT }}" > ${{ github.workspace }}/terraform/.ssh/devops_stage6.pub
-        chmod 644 ${{ github.workspace }}/terraform/.ssh/devops_stage6.pub
+      - name: Terraform Init
+        working-directory: ./infra/terraform
+        run: terraform init
 
-    - name: Terraform Init
-      working-directory: ./terraform
-      run: terraform init
+      - name: Terraform Validate
+        working-directory: ./infra/terraform
+        run: terraform validate
 
-    - name: Terraform Plan
-      id: plan
-      working-directory: ./terraform
-      run: |
-        set +e
-        terraform plan \
-          -var "ssh_public_key=${{ secrets.SSH_PUBLIC_KEY_CONTENT }}" \
-          -detailed-exitcode \
-          -out=tfplan \
-          -no-color 2>&1 | tee plan_output.txt
+      - name: Terraform Plan
+        id: plan
+        working-directory: ./infra/terraform
+        run: |
+          terraform plan -detailed-exitcode -out=tfplan || echo "exitcode=$?" >> $GITHUB_OUTPUT
+        continue-on-error: true
 
-        PLAN_EXIT_CODE=${PIPESTATUS[0]}
-        echo "exitcode=$PLAN_EXIT_CODE" >> $GITHUB_OUTPUT
+      - name: Detect Drift
+        id: drift
+        working-directory: ./infra/terraform
+        run: |
+          EXITCODE=${{ steps.plan.outputs.exitcode }}
+          if [ "$EXITCODE" == "2" ]; then
+            echo "drift_detected=true" >> $GITHUB_OUTPUT
+            echo "⚠️ DRIFT DETECTED - Infrastructure changes required"
+          else
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+            echo "✅ No drift detected - Infrastructure is in sync"
+          fi
 
-        if [ $PLAN_EXIT_CODE -eq 1 ]; then
-          echo "❌ Terraform plan failed with errors"
-          exit 1
-        fi
-
-        exit 0
-
-    - name: Check for Changes (Drift Detection)
-      id: check_changes
-      working-directory: ./terraform
-      run: |
-        PLAN_EXIT_CODE=${{ steps.plan.outputs.exitcode }}
-
-        if [ "$PLAN_EXIT_CODE" = "0" ]; then
-          echo "has_changes=false" >> $GITHUB_OUTPUT
-          echo "✅ No infrastructure drift detected"
-        elif [ "$PLAN_EXIT_CODE" = "2" ]; then
-          echo "has_changes=true" >> $GITHUB_OUTPUT
-          echo "⚠️ Infrastructure changes detected!"
-        fi
-
-    - name: Upload Terraform Plan
-      if: steps.check_changes.outputs.has_changes == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: tfplan
-        path: terraform/tfplan
-        retention-days: 5
-
-    - name: Upload Plan Output
-      if: steps.check_changes.outputs.has_changes == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: plan-output
-        path: terraform/plan_output.txt
-        retention-days: 5
-
-    - name: Upload SSH Key
-      if: steps.check_changes.outputs.has_changes == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: ssh-key
-        path: terraform/.ssh/devops_stage6.pub
-        retention-days: 1
+      - name: Save Plan
+        if: steps.drift.outputs.drift_detected == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: infra/terraform/tfplan
+          retention-days: 5
 
   send-drift-notification:
-    name: Send Drift Detection Email
-    needs: terraform-plan
-    if: needs.terraform-plan.outputs.has_changes == 'true'
+    name: Send Drift Alert Email
     runs-on: ubuntu-latest
-
+    needs: terraform-plan
+    if: needs.terraform-plan.outputs.drift_detected == 'true'
+    
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Download Plan Output
-      uses: actions/download-artifact@v4
-      with:
-        name: plan-output
-
-    - name: Prepare Email Body
-      run: |
-        cat > email_body.txt <<EOF
-        ⚠️ TERRAFORM DRIFT DETECTED ⚠️
-
-        Infrastructure changes have been detected in your TODO Application deployment.
-
-        📋 Details:
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        Repository: ${{ github.repository }}
-        Branch: ${{ github.ref_name }}
-        Commit: ${{ github.sha }}
-        Triggered by: ${{ github.actor }}
-        Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-        📊 Terraform Plan Output:
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        EOF
-        cat plan_output.txt >> email_body.txt
-        cat >> email_body.txt <<EOF
-
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-        ⚠️ ACTION REQUIRED:
-        The deployment workflow is now paused and waiting for manual approval.
-
-        👉 To approve these changes and proceed with deployment:
-           Visit: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-           Click "Review deployments" and approve the "production" environment
-
-        👉 To reject these changes:
-           Simply close the workflow run or let it timeout
-
-        ⏱️ This approval request will expire in 1 hour.
-        🔐 Security Note: Only authorized approvers can deploy these changes.
-        EOF
-
-    - name: Send Email Notification
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: '⚠️ [ACTION REQUIRED] Terraform Drift Detected - kefaslungu.name.ng'
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: 'DevOps CI/CD <${{ secrets.EMAIL_USERNAME }}>'
-        body: file://email_body.txt
-        priority: high
-
-    - name: Post Comment on Commit (if push event)
-      if: github.event_name == 'push'
-      uses: actions/github-script@v7
-      with:
-        script: |
-          github.rest.repos.createCommitComment({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            commit_sha: context.sha,
-            body: '⚠️ **Terraform Drift Detected**\n\nInfrastructure changes detected. Email sent to approvers.\n\n[View Workflow Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})'
-          })
+      - name: Send Email Notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.ADMIN_EMAIL}}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "⚠️ Azure Infrastructure Drift Detected - Approval Required"
+          to: ${{ secrets.ADMIN_EMAIL}}
+          from: DevOps Pipeline <${{ secrets.ADMIN_EMAIL}}>
+          html_body: |
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <style>
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                .header { background: linear-gradient(135deg, #0078d4 0%, #005a9e 100%); color: white; padding: 20px; border-radius: 5px; }
+                .header.warning { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+                .content { background: #f4f4f4; padding: 20px; margin: 20px 0; border-radius: 5px; }
+                .footer { text-align: center; color: #666; margin-top: 20px; }
+                .btn { 
+                  display: inline-block; 
+                  padding: 10px 20px; 
+                  background: #0078d4; 
+                  color: white; 
+                  text-decoration: none; 
+                  border-radius: 5px; 
+                  margin: 10px 0;
+                }
+                .warning { color: #ff6b6b; font-weight: bold; }
+                .azure-icon { color: #0078d4; }
+              </style>
+            </head>
+            <body>
+              <div class="container">
+                <div class="header warning">
+                  <h2>🚨 Azure Infrastructure Drift Detected</h2>
+                </div>
+                <div class="content">
+                  <p><strong>☁️ Cloud Provider:</strong> Microsoft Azure</p>
+                  <p><strong>Repository:</strong> ${{ github.repository }}</p>
+                  <p><strong>Branch:</strong> ${{ github.ref_name }}</p>
+                  <p><strong>Commit:</strong> ${{ github.sha }}</p>
+                  <p><strong>Author:</strong> ${{ github.actor }}</p>
+                  <p><strong>Workflow:</strong> ${{ github.workflow }}</p>
+                  
+                  <hr>
+                  
+                  <p class="warning">⚠️ Infrastructure changes have been detected and require approval.</p>
+                  
+                  <p>Terraform has identified drift or changes in your Azure infrastructure that need to be applied.</p>
+                  
+                  <h3>Next Steps:</h3>
+                  <ol>
+                    <li>Review the changes in the GitHub Actions workflow</li>
+                    <li>Verify changes in Azure Portal if needed</li>
+                    <li>Approve the deployment if changes are expected</li>
+                    <li>Investigate if changes are unexpected</li>
+                  </ol>
+                  
+                  <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" class="btn">
+                    View Workflow Run
+                  </a>
+                </div>
+                <div class="footer">
+                  <p>This is an automated notification from your DevOps pipeline.</p>
+                  <p><small>Run ID: ${{ github.run_id }}</small></p>
+                </div>
+              </div>
+            </body>
+            </html>
 
   wait-for-approval:
     name: Wait for Manual Approval
-    needs: [ terraform-plan, send-drift-notification ]
-    if: needs.terraform-plan.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: https://padre.the.chickenkiller.com
-    timeout-minutes: 60
-
+    needs: [terraform-plan, send-drift-notification]
+    if: needs.terraform-plan.outputs.drift_detected == 'true'
+    environment: 
+      name: production-approval
+    
     steps:
-    - name: Manual Approval Granted
-      run: |
-        echo "✅ Manual approval granted by reviewer"
-        echo "Proceeding with terraform apply..."
+      - name: Approval Checkpoint
+        run: |
+          echo "✅ Manual approval received"
+          echo "Proceeding with terraform apply..."
 
   terraform-apply:
-    name: Apply Infrastructure Changes
-    needs: [ terraform-plan, wait-for-approval ]
-    if: needs.terraform-plan.outputs.has_changes == 'true'
+    name: Terraform Apply
     runs-on: ubuntu-latest
-    env:
-      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-
-    outputs:
-      instance_ip: ${{ steps.vm_info.outputs.instance_ip }}
-      instance_id: ${{ steps.vm_info.outputs.instance_id }}
-      server_exists: ${{ steps.vm_info.outputs.server_exists }}
-
+    needs: [terraform-plan, wait-for-approval]
+    if: |
+      always() &&
+      (needs.terraform-plan.outputs.drift_detected == 'false' ||
+       needs.wait-for-approval.result == 'success')
+    
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Login to Azure
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: ${{ env.TF_VERSION }}
-        terraform_wrapper: false
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
 
-    - name: Download Terraform Plan
-      uses: actions/download-artifact@v4
-      with:
-        name: tfplan
-        path: terraform/
+      - name: Terraform Init
+        working-directory: ./infra/terraform
+        run: terraform init
 
-    - name: Download SSH Key
-      uses: actions/download-artifact@v4
-      with:
-        name: ssh-key
-        path: terraform/.ssh/
+      - name: Download Plan
+        if: needs.terraform-plan.outputs.drift_detected == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: infra/terraform/
 
-    - name: Setup SSH Key for Deployment
-      run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan github.com >> ~/.ssh/known_hosts
-
-    - name: Terraform Init
-      working-directory: ./terraform
-      run: terraform init
-
-    - name: Terraform Apply
-      working-directory: ./terraform
-      run: terraform apply -auto-approve tfplan
-
-    - name: Get VM Instance Info
-      id: vm_info
-      working-directory: ./terraform
-      run: |
-        # Get outputs directly after apply (state is fresh)
-        INSTANCE_IP=$(terraform output -raw server_public_ip 2>/dev/null || echo "")
-        INSTANCE_ID=$(terraform output -raw server_id 2>/dev/null || echo "")
-
-        echo "instance_ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
-        echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-        echo "Instance IP: $INSTANCE_IP"
-        echo "Instance ID: $INSTANCE_ID"
-
-        if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "" ]; then
-          echo "server_exists=true" >> $GITHUB_OUTPUT
-          echo "✅ VM instance exists: $INSTANCE_ID"
-          echo "📍 Public IP: $INSTANCE_IP"
-        else
-          echo "server_exists=false" >> $GITHUB_OUTPUT
-          echo "⚠️ No VM instance found in outputs"
-        fi
-
-    - name: Save Instance Info to File
-      if: steps.vm_info.outputs.server_exists == 'true'
-      run: |
-        mkdir -p instance-info
-        cat > instance-info/server.json <<EOF
-        {
-          "instance_id": "${{ steps.vm_info.outputs.instance_id }}",
-          "instance_ip": "${{ steps.vm_info.outputs.instance_ip }}"
-        }
-        EOF
-        cat instance-info/server.json
-
-    - name: Upload Instance Info
-      if: steps.vm_info.outputs.server_exists == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: vm-info
-        path: instance-info/
-        retention-days: 1
-
-    - name: Send Success Email
-      if: success()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: '✅ Infrastructure Deployment Successful - kefaslungu.name.ng'
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: 'DevOps CI/CD <${{ secrets.EMAIL_USERNAME }}>'
-        body: |
-          ✅ INFRASTRUCTURE DEPLOYMENT SUCCESSFUL
-
-          The infrastructure changes have been successfully applied.
-
-          📋 Details:
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Repository: ${{ github.repository }}
-          Branch: ${{ github.ref_name }}
-          Commit: ${{ github.sha }}
-          Deployed by: ${{ github.actor }}
-          Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          Instance ID: ${{ steps.vm_info.outputs.instance_id }}
-          Instance IP: ${{ steps.vm_info.outputs.instance_ip }}
-
-          🌐 Application URL: https://kefaslungu.name.ng
-
-          ✨ Infrastructure is ready. Ansible configuration will run next if server exists.
-
-    - name: Send Failure Email
-      if: failure()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: '❌ Infrastructure Deployment Failed - kefaslungu.name.ng'
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: 'DevOps CI/CD <${{ secrets.EMAIL_USERNAME }}>'
-        body: |
-          ❌ INFRASTRUCTURE DEPLOYMENT FAILED
-
-          The infrastructure deployment encountered an error.
-
-          📋 Details:
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Repository: ${{ github.repository }}
-          Branch: ${{ github.ref_name }}
-          Commit: ${{ github.sha }}
-          Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          ⚠️ ACTION REQUIRED:
-          Please check the workflow logs for error details and take corrective action.
-
-  ansible-configure:
-    name: Run Ansible Configuration
-    needs: [ terraform-apply ]
-    if: success() && needs.terraform-apply.outputs.server_exists == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
-
-    - name: Display Instance Information
-      run: |
-        echo "🔍 Instance Information:"
-        echo "Instance ID: ${{ needs.terraform-apply.outputs.instance_id }}"
-        echo "Instance IP: ${{ needs.terraform-apply.outputs.instance_ip }}"
-        echo "Server Exists: ${{ needs.terraform-apply.outputs.server_exists }}"
-
-    - name: Setup SSH Key for Ansible
-      run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/devops_stage6
-        chmod 600 ~/.ssh/devops_stage6
-        chmod 700 ~/.ssh
-
-    - name: Install Ansible
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ansible
-
-    - name: Update Ansible Inventory
-      run: |
-        INSTANCE_IP="${{ needs.terraform-apply.outputs.instance_ip }}"
-        echo "📝 Updating Ansible inventory with IP: $INSTANCE_IP"
-
-        # Create inventory directory if it doesn't exist
-        mkdir -p ansible/inventory
-
-        # Create/update hosts.ini (matching the playbook reference)
-        cat > ansible/inventory/hosts.ini <<EOF
-        [web]
-        todo_server ansible_host=$INSTANCE_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/devops_stage6 ansible_ssh_common_args='-o StrictHostKeyChecking=no'
-        EOF
-
-        echo "✅ Inventory updated:"
-        cat ansible/inventory/hosts.ini
-
-    - name: Wait for SSH to be Ready
-      run: |
-        INSTANCE_IP="${{ needs.terraform-apply.outputs.instance_ip }}"
-        echo "⏳ Waiting for SSH to be ready on $INSTANCE_IP..."
-
-        for i in {1..30}; do
-          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i ~/.ssh/devops_stage6 ubuntu@$INSTANCE_IP "echo 'SSH Ready'" 2>/dev/null; then
-            echo "✅ SSH is ready!"
-            exit 0
+      - name: Terraform Apply
+        working-directory: ./infra/terraform
+        run: |
+          if [ -f tfplan ]; then
+            terraform apply tfplan
+          else
+            terraform apply -auto-approve
           fi
-          echo "Attempt $i/30: SSH not ready yet, waiting 10s..."
-          sleep 10
-        done
 
-        echo "❌ SSH connection timeout after 5 minutes"
-        exit 1
+      - name: Save Inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-inventory
+          path: infra/ansible/inventory.ini
+          retention-days: 1
 
-    - name: Test Ansible Connection
-      working-directory: ./ansible
-      run: |
-        echo "🔍 Testing Ansible connection..."
-        ansible all -i inventory/hosts.ini -m ping -v
-
-    - name: Run Ansible Playbook
-      working-directory: ./ansible
-      run: |
-        echo "🚀 Running Ansible configuration..."
-        ansible-playbook -i inventory/hosts.ini playbook.yml -v
-
-    - name: Send Ansible Success Email
-      if: success()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: '✅ Ansible Configuration Successful - kefaslungu.name.ng'
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: 'DevOps CI/CD <${{ secrets.EMAIL_USERNAME }}>'
-        body: |
-          ✅ ANSIBLE CONFIGURATION SUCCESSFUL
-
-          Server configuration has been applied successfully.
-
-          📋 Details:
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Repository: ${{ github.repository }}
-          Branch: ${{ github.ref_name }}
-          Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          Instance ID: ${{ needs.terraform-apply.outputs.instance_id }}
-          Instance IP: ${{ needs.terraform-apply.outputs.instance_ip }}
-
-          🌐 Application URL: https://kefaslungu.name.ng
-
-          ✨ Infrastructure is fully configured and ready for application deployment.
-
-    - name: Send Ansible Failure Email
-      if: failure()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: '❌ Ansible Configuration Failed - kefaslungu.name.ng'
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: 'DevOps CI/CD <${{ secrets.EMAIL_USERNAME }}>'
-        body: |
-          ❌ ANSIBLE CONFIGURATION FAILED
-
-          Server configuration encountered an error.
-
-          📋 Details:
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Repository: ${{ github.repository }}
-          Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          Instance IP: ${{ needs.terraform-apply.outputs.instance_ip }}
-
-          ⚠️ ACTION REQUIRED:
-          Please check the workflow logs for error details.
-
-  auto-apply-no-drift:
-    name: Auto-Apply (No Drift Detected)
-    needs: terraform-plan
-    if: needs.terraform-plan.outputs.has_changes == 'false'
+  ansible-deploy:
+    name: Ansible Deployment
     runs-on: ubuntu-latest
-    env:
-      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-
-    outputs:
-      instance_ip: ${{ steps.check_server.outputs.instance_ip }}
-      instance_id: ${{ steps.check_server.outputs.instance_id }}
-      server_exists: ${{ steps.check_server.outputs.server_exists }}
-
+    needs: terraform-apply
+    
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Login to Azure
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Download Inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: infra/ansible/
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: ${{ env.TF_VERSION }}
-        terraform_wrapper: false
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-    - name: Setup SSH Key for Terraform
-      run: |
-        mkdir -p ${{ github.workspace }}/terraform/.ssh
-        echo "${{ secrets.SSH_PUBLIC_KEY }}" > ${{ github.workspace }}/terraform/.ssh/devops_stage6.pub
-        chmod 644 ${{ github.workspace }}/terraform/.ssh/devops_stage6.pub
+      - name: Install Ansible
+        run: |
+          pip install ansible==${{ env.ANSIBLE_VERSION }}
+          ansible-galaxy collection install community.docker
 
-    - name: Terraform Init
-      working-directory: ./terraform
-      run: terraform init
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY_CONTENT}}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H $(cat infra/ansible/inventory.ini | grep -oP '(?<=ansible_host=)[^ ]+') >> ~/.ssh/known_hosts
 
-    - name: Terraform Apply (Auto)
-      working-directory: ./terraform
-      run: |
-        echo "✅ No infrastructure drift detected"
-        echo "Terraform state matches desired configuration"
-        terraform apply -auto-approve -var "ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}"
-
-    - name: Check if Server Exists
-      id: check_server
-      working-directory: ./terraform
-      run: |
-        INSTANCE_ID=$(terraform output -raw server_id 2>/dev/null || echo "")
-        INSTANCE_IP=$(terraform output -raw server_public_ip 2>/dev/null || echo "")
-
-        echo "instance_ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
-        echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-
-        if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "" ]; then
-          echo "server_exists=true" >> $GITHUB_OUTPUT
-          echo "✅ Server exists: $INSTANCE_ID at $INSTANCE_IP"
-        else
-          echo "server_exists=false" >> $GITHUB_OUTPUT
-          echo "⚠️ No server found - skipping Ansible"
-        fi
-
-    - name: Send Success Email
-      if: success()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: '✅ Infrastructure Auto-Applied (No Drift) - kefaslungu.name.ng'
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: 'DevOps CI/CD <${{ secrets.EMAIL_USERNAME }}>'
-        body: |
-          ✅ INFRASTRUCTURE AUTO-APPLIED
-
-          No drift detected. Infrastructure and configuration automatically applied.
-
-          📋 Details:
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Repository: ${{ github.repository }}
-          Branch: ${{ github.ref_name }}
-          Commit: ${{ github.sha }}
-          Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          Instance ID: ${{ steps.check_server.outputs.instance_id }}
-          Instance IP: ${{ steps.check_server.outputs.instance_ip }}
-
-          🌐 Application URL: https://kefaslungu.name.ng
-
-  ansible-configure-no-drift:
-    name: Run Ansible Configuration (No Drift)
-    needs: [ auto-apply-no-drift ]
-    if: success() && needs.auto-apply-no-drift.outputs.server_exists == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
-
-    - name: Display Instance Information
-      run: |
-        echo "🔍 Instance Information:"
-        echo "Instance ID: ${{ needs.auto-apply-no-drift.outputs.instance_id }}"
-        echo "Instance IP: ${{ needs.auto-apply-no-drift.outputs.instance_ip }}"
-
-    - name: Setup SSH Key for Ansible
-      run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/devops_stage6
-        chmod 600 ~/.ssh/devops_stage6
-        chmod 700 ~/.ssh
-
-    - name: Install Ansible
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ansible
-
-    - name: Update Ansible Inventory
-      run: |
-        INSTANCE_IP="${{ needs.auto-apply-no-drift.outputs.instance_ip }}"
-        echo "📝 Updating Ansible inventory with IP: $INSTANCE_IP"
-        mkdir -p ansible/inventory
-        cat > ansible/inventory/hosts.ini <<EOF
-        [web]
-        todo_server ansible_host=$INSTANCE_IP ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/devops_stage6 ansible_ssh_common_args='-o StrictHostKeyChecking=no'
-        EOF
-        echo "✅ Inventory updated"
-
-    - name: Wait for SSH to be Ready
-      run: |
-        INSTANCE_IP="${{ needs.auto-apply-no-drift.outputs.instance_ip }}"
-        echo "⏳ Waiting for SSH to be ready on $INSTANCE_IP..."
-
-        for i in {1..30}; do
-          if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i ~/.ssh/devops_stage6 ubuntu@$INSTANCE_IP "echo 'SSH Ready'" 2>/dev/null; then
-            echo "✅ SSH is ready!"
-            exit 0
-          fi
-          echo "Attempt $i/30: SSH not ready yet, waiting 10s..."
-          sleep 10
-        done
-
-        echo "❌ SSH connection timeout"
-        exit 1
-
-    - name: Test Ansible Connection
-      working-directory: ./ansible
-      run: |
-        echo "🔍 Testing Ansible connection..."
-        ansible all -i inventory/hosts.ini -m ping -v
-
-    - name: Run Ansible Playbook
-      working-directory: ./ansible
-      run: |
-        echo "🚀 Running Ansible configuration (no drift path)..."
-        ansible-playbook -i inventory/hosts.ini playbook.yml -v
-
-    - name: Send Success Email
-      if: success()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: '✅ Infrastructure & Ansible Complete (No Drift) - kefaslungu.name.ng'
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: 'DevOps CI/CD <${{ secrets.EMAIL_USERNAME }}>'
-        body: |
-          ✅ COMPLETE DEPLOYMENT SUCCESSFUL
-
-          No drift detected. Infrastructure and Ansible configuration complete.
-
-          📋 Details:
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Repository: ${{ github.repository }}
-          Branch: ${{ github.ref_name }}
-          Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          Instance ID: ${{ needs.auto-apply-no-drift.outputs.instance_id }}
-          Instance IP: ${{ needs.auto-apply-no-drift.outputs.instance_ip }}
-
-          🌐 Application URL: https://kefaslungu.name.ng
-
-    - name: Send Failure Email
-      if: failure()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 587
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: '❌ Ansible Configuration Failed (No Drift) - kefaslungu.name.ng'
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        from: 'DevOps CI/CD <${{ secrets.EMAIL_USERNAME }}>'
-        body: |
-          ❌ ANSIBLE CONFIGURATION FAILED
-
-          Server configuration encountered an error.
-
-          📋 Details:
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Repository: ${{ github.repository }}
-          Workflow Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          ⚠️ ACTION REQUIRED:
-          Please check the workflow logs for error details.
+      - name: Run Ansible Playbook
+        working-directory: ./infra/ansible
+        run: |
+          ansible-playbook -i inventory.ini playbook.yml

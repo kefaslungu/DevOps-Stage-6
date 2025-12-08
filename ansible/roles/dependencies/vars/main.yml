@@ -1,4 +1,0 @@
----
-git_repo_url: "https://github.com/kefaslungu/DevOps-Stage-6.git"
-git_branch: "main"
-app_dest: "/home/{{ ansible_user }}/app"
