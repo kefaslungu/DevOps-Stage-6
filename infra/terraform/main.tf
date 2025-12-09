@@ -1,4 +1,3 @@
-# infra/terraform/main.tf
 terraform {
   required_version = ">= 1.6.0"
   
@@ -33,7 +32,7 @@ data "azurerm_virtual_network" "main" {
 }
 
 data "azurerm_subnet" "main" {
-  name                 = var.existing_subnet_name  # Get this from the command above
+  name                 = var.existing_subnet_name
   virtual_network_name = data.azurerm_virtual_network.main.name
   resource_group_name  = data.azurerm_resource_group.main.name
 }
@@ -53,7 +52,8 @@ data "azurerm_network_interface" "main" {
   resource_group_name = data.azurerm_resource_group.main.name
 }
 
-data "azurerm_linux_virtual_machine" "main" {
+# Reference existing Virtual Machine (fixed)
+data "azurerm_virtual_machine" "main" {
   name                = "HNG-13"
   resource_group_name = data.azurerm_resource_group.main.name
 }
@@ -71,13 +71,13 @@ resource "local_file" "ansible_inventory" {
 # Null resource to trigger Ansible
 resource "null_resource" "run_ansible" {
   triggers = {
-    vm_id      = data.azurerm_linux_virtual_machine.main.id
+    vm_id      = data.azurerm_virtual_machine.main.id
     always_run = timestamp()
   }
 
   provisioner "local-exec" {
     command = <<-EOT
-      echo "Using existing VM: ${data.azurerm_linux_virtual_machine.main.name}"
+      echo "Using existing VM: ${data.azurerm_virtual_machine.main.name}"
       echo "Public IP: ${data.azurerm_public_ip.main.ip_address}"
       echo "Waiting for VM to be ready..."
       timeout /t 10
