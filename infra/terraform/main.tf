@@ -10,9 +10,9 @@ terraform {
   }
   
   backend "azurerm" {
-    resource_group_name  = "terraform-state-rg"
-    storage_account_name = "tfstatexxxxx"  # Update with your storage account
-    container_name       = "tfstate"
+    resource_group_name  = "Hng-13(RG)"
+    storage_account_name = "hng13storage"
+    container_name       = "hng13container"
     key                  = "todo-app.terraform.tfstate"
   }
 }
