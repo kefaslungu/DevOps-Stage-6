@@ -1,21 +1,16 @@
-output "resource_group_name" {
-  description = "Resource group name"
-  value       = data.azurerm_resource_group.main.name
-}
-
 output "vm_name" {
   description = "Virtual machine name"
   value       = data.azurerm_virtual_machine.main.name
 }
 
-output "vm_size" {
-  description = "Virtual machine size"
-  value       = data.azurerm_virtual_machine.main.size
+output "vm_id" {
+  description = "ID of the existing VM"
+  value       = data.azurerm_virtual_machine.main.id
 }
 
-output "vm_os" {
-  description = "Operating system of the VM"
-  value       = data.azurerm_virtual_machine.main.storage_os_disk[0].os_type
+output "resource_group_name" {
+  description = "Resource group name"
+  value       = data.azurerm_resource_group.main.name
 }
 
 output "public_ip" {
